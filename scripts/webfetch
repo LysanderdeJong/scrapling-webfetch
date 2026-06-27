@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# Compatibility wrapper for agents that run from the repo checkout. The real CLI
+# is installed as a uv tool named `webfetch`; this falls back to the local source
+# tree for development before installation.
+set -euo pipefail
+export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
+
+if command -v uv >/dev/null 2>&1; then
+  TOOL_BIN="$(uv tool dir --bin 2>/dev/null || true)/webfetch"
+  if [ -x "$TOOL_BIN" ]; then
+    exec "$TOOL_BIN" "$@"
+  fi
+fi
+
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="$(cd "$DIR/.." && pwd)"
+PYBIN="${PYTHON:-python3}"
+PYTHONPATH="$ROOT/src${PYTHONPATH:+:$PYTHONPATH}" exec "$PYBIN" -m scrapling_webfetch.cli "$@"

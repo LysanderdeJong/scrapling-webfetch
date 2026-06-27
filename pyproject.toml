@@ -1,0 +1,20 @@
+[project]
+name = "scrapling-webfetch"
+version = "0.1.0"
+description = "MCP-shaped Scrapling web fetching CLI for AI agents"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  "scrapling[fetchers]>=0.4.9,<0.5",
+  "markdownify>=1.2,<2",
+]
+
+[project.scripts]
+webfetch = "scrapling_webfetch.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
