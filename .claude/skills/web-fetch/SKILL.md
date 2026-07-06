@@ -44,6 +44,39 @@ Hard protection:
 webfetch stealthy-fetch URL --solve-cloudflare --extraction-type markdown
 ```
 
+One-shot stealth blocked but a normal browser session should work:
+
+```bash
+webfetch stealthy-fetch URL \
+  --warmup-url https://marketplace.example/ \
+  --real-chrome \
+  --no-browser-flags \
+  --locale nl-NL \
+  --timezone-id Europe/Amsterdam \
+  --network-idle \
+  --wait 2500 \
+  --no-google-search \
+  --block-webrtc \
+  --hide-canvas \
+  --no-block-ads \
+  --extraction-type text
+```
+
+Consent-gated site setup:
+
+```bash
+webfetch stealthy-fetch URL \
+  --user-data-dir .webfetch-profile \
+  --headful \
+  --real-chrome \
+  --no-browser-flags \
+  --locale nl-NL \
+  --timezone-id Europe/Amsterdam \
+  --network-idle \
+  --wait 60000 \
+  --extraction-type text
+```
+
 ## Selectors
 
 Use `--css-selector` after the page is reachable to reduce tokens. Start broad,
@@ -70,8 +103,12 @@ and `data-testid` over generated class names.
 - `--extraction-type markdown|html|text` — default `markdown`.
 - `--main-content-only / --no-main-content-only` — default on; keeps prompt-injection cleanup.
 - `--network-idle`, `--wait <ms>`, `--wait-selector <css>` — hydration recovery.
+- `--headless / --headful` — browser commands default to headless; use headful for manual consent/login setup.
 - `--block-ads / --no-block-ads` — browser commands default to Scrapling ad/tracker blocking.
 - `--disable-resources` — speed option; can break pages.
+- `--session` / `--user-data-dir <dir>` — use `StealthySession`; `--user-data-dir` persists browser state and implies session mode.
+- `--warmup-url <url>` — fetch setup pages first in the same `StealthySession`; repeat for multiple warmups.
+- `--real-chrome`, `--locale`, `--timezone-id`, `--no-browser-flags`, `--no-google-search` — useful when session consistency matters more than sandbox defaults.
 
 Notes:
 

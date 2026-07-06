@@ -122,6 +122,44 @@ webfetch stealthy-fetch https://hard.example.com \
   --extraction-type text
 ```
 
+Some sites block one-shot browser fetches but allow a consistent browser session.
+Use `--session`, `--warmup-url`, or `--user-data-dir` for those cases.
+
+For sites that need a same-origin warmup, fetch the homepage before the search
+page in the same session:
+
+```bash
+webfetch stealthy-fetch "https://marketplace.example/search?q=gpu" \
+  --warmup-url https://marketplace.example/ \
+  --real-chrome \
+  --no-browser-flags \
+  --locale nl-NL \
+  --timezone-id Europe/Amsterdam \
+  --network-idle \
+  --wait 2500 \
+  --no-google-search \
+  --block-webrtc \
+  --hide-canvas \
+  --no-block-ads \
+  --extraction-type text
+```
+
+For consent-gated sites, run once headfully with a persistent profile, make the
+consent choice manually, then reuse the same profile headless:
+
+```bash
+webfetch stealthy-fetch "https://community.example/" \
+  --user-data-dir .consented-profile \
+  --headful \
+  --real-chrome \
+  --no-browser-flags \
+  --locale nl-NL \
+  --timezone-id Europe/Amsterdam \
+  --network-idle \
+  --wait 60000 \
+  --extraction-type text
+```
+
 ## Options
 
 | Option | Default | Notes |
@@ -133,14 +171,26 @@ webfetch stealthy-fetch https://hard.example.com \
 | `--network-idle` | false | Browser commands only |
 | `--wait MS` | `0` | Browser commands only |
 | `--disable-resources` | false | Browser commands only |
+| `--headless / --headful` | headless | Browser commands only; use headful for manual consent/login setup |
 | `--block-ads / --no-block-ads` | true | Browser commands only; uses Scrapling's built-in ad/tracker domain blocking |
 | `--proxy URL` | none for browsers | `get` uses `$HTTPS_PROXY` unless `--no-proxy` |
+| `--real-chrome` | false | Browser commands only; use installed Chrome instead of bundled Chromium |
+| `--locale LOCALE` | none | Browser commands only; passes Scrapling locale |
+| `--timezone-id ZONE` | none | Browser commands only; passes Scrapling timezone |
+| `--google-search / --no-google-search` | Scrapling default | Browser commands only; controls Google referrer behavior |
+| `--no-browser-flags` | false | Browser commands only; disables this CLI's default Chromium flags |
+| `--session` | false | `stealthy-fetch` only; use `StealthySession` instead of one-shot `StealthyFetcher` |
+| `--user-data-dir DIR` | none | `stealthy-fetch` only; persistent browser profile, implies `--session` |
+| `--warmup-url URL` | none | `stealthy-fetch` only; fetch URL before the target in the same session, repeatable |
+| `--block-webrtc` | false | `stealthy-fetch` only |
+| `--hide-canvas` | false | `stealthy-fetch` only |
+| `--allow-webgl / --no-allow-webgl` | Scrapling default | `stealthy-fetch` only |
 
 If a browser command returns only a cookie/consent shell, spinner, or empty page
 frame, retry with hydration waits before changing backends:
 
 ```bash
-webfetch fetch "https://www.coolblue.nl/zoeken?query=rtx%205060%20ti%2016gb" \
+webfetch fetch "https://shop.example/search?query=gpu" \
   --network-idle \
   --wait 3000 \
   --extraction-type markdown

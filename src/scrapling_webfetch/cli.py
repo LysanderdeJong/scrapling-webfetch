@@ -83,10 +83,11 @@ def fetch_get(args: argparse.Namespace):
 
 def browser_kwargs(args: argparse.Namespace) -> dict[str, Any]:
     kwargs: dict[str, Any] = {
-        "headless": True,
+        "headless": args.headless,
         "timeout": args.timeout,
-        "extra_flags": browser_flags(has_proxy=bool(args.proxy)),
     }
+    if not args.no_browser_flags:
+        kwargs["extra_flags"] = browser_flags(has_proxy=bool(args.proxy))
     if args.wait:
         kwargs["wait"] = args.wait
     if args.wait_selector:
@@ -99,6 +100,14 @@ def browser_kwargs(args: argparse.Namespace) -> dict[str, Any]:
         kwargs["block_ads"] = True
     if args.proxy:
         kwargs["proxy"] = args.proxy
+    if getattr(args, "real_chrome", False):
+        kwargs["real_chrome"] = True
+    if getattr(args, "locale", None):
+        kwargs["locale"] = args.locale
+    if getattr(args, "timezone_id", None):
+        kwargs["timezone_id"] = args.timezone_id
+    if getattr(args, "google_search", None) is not None:
+        kwargs["google_search"] = args.google_search
     return kwargs
 
 
@@ -111,12 +120,29 @@ def fetch_dynamic(args: argparse.Namespace):
 
 
 def fetch_stealthy(args: argparse.Namespace):
-    from scrapling.fetchers import StealthyFetcher
-
     kwargs = browser_kwargs(args)
     kwargs["additional_args"] = {"ignore_https_errors": True}
     if args.solve_cloudflare:
         kwargs["solve_cloudflare"] = True
+    if args.block_webrtc:
+        kwargs["block_webrtc"] = True
+    if args.hide_canvas:
+        kwargs["hide_canvas"] = True
+    if args.allow_webgl is not None:
+        kwargs["allow_webgl"] = args.allow_webgl
+    if args.user_data_dir:
+        kwargs["user_data_dir"] = args.user_data_dir
+
+    if args.session or args.user_data_dir or args.warmup_url:
+        from scrapling.fetchers import StealthySession
+
+        with StealthySession(**kwargs) as session:
+            for warmup_url in args.warmup_url:
+                session.fetch(warmup_url)
+            return session.fetch(args.url)
+
+    from scrapling.fetchers import StealthyFetcher
+
     return StealthyFetcher.fetch(args.url, **kwargs)
 
 
@@ -254,9 +280,17 @@ def add_browser(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--wait-selector")
     parser.add_argument("--network-idle", action="store_true")
     parser.add_argument("--disable-resources", action="store_true")
+    parser.add_argument("--headless", dest="headless", action="store_true", default=True)
+    parser.add_argument("--headful", dest="headless", action="store_false")
     parser.add_argument("--block-ads", dest="block_ads", action="store_true", default=True)
     parser.add_argument("--no-block-ads", dest="block_ads", action="store_false")
     parser.add_argument("--proxy", help="explicit browser proxy; unset by default")
+    parser.add_argument("--no-browser-flags", action="store_true", help="do not pass default Chromium flags")
+    parser.add_argument("--real-chrome", action="store_true")
+    parser.add_argument("--locale")
+    parser.add_argument("--timezone-id")
+    parser.add_argument("--google-search", dest="google_search", action="store_true", default=None)
+    parser.add_argument("--no-google-search", dest="google_search", action="store_false")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -278,6 +312,13 @@ def build_parser() -> argparse.ArgumentParser:
         stealth_parser = subparsers.add_parser(name)
         add_browser(stealth_parser)
         stealth_parser.add_argument("--solve-cloudflare", action="store_true")
+        stealth_parser.add_argument("--session", action="store_true", help="use StealthySession instead of one-shot StealthyFetcher")
+        stealth_parser.add_argument("--user-data-dir", help="persistent browser profile directory; implies --session")
+        stealth_parser.add_argument("--warmup-url", action="append", default=[], help="fetch this URL first in the same StealthySession; repeatable")
+        stealth_parser.add_argument("--block-webrtc", action="store_true")
+        stealth_parser.add_argument("--hide-canvas", action="store_true")
+        stealth_parser.add_argument("--allow-webgl", dest="allow_webgl", action="store_true", default=None)
+        stealth_parser.add_argument("--no-allow-webgl", dest="allow_webgl", action="store_false")
         stealth_parser.set_defaults(fetcher=fetch_stealthy)
 
     return parser
