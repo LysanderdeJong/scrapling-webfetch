@@ -9,35 +9,11 @@
 # Prerequisite: Network access must be set to Full.
 set -euo pipefail
 
-if [ -z "${PLAYWRIGHT_BROWSERS_PATH:-}" ] && [ -d /opt/pw-browsers ]; then
-  export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
-else
-  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
-fi
-export PATCHRIGHT_BROWSERS_PATH="${PATCHRIGHT_BROWSERS_PATH:-$PLAYWRIGHT_BROWSERS_PATH}"
 PYTHON_VERSION="${PYTHON_VERSION:-3.11}"
 WEBFETCH_REF="${WEBFETCH_REF:-main}"
 INSTALL_CLAUDE_SKILL="${INSTALL_CLAUDE_SKILL:-1}"
 INSTALL_CLAUDE_SKILL_WITH_NPX="${INSTALL_CLAUDE_SKILL_WITH_NPX:-0}"
 WORKDIR=""
-
-if [ "$PLAYWRIGHT_BROWSERS_PATH" = "/opt/ms-playwright" ] && [ -d /opt/pw-browsers ]; then
-  # Hosted agent images may already contain the matching browser revisions in
-  # /opt/pw-browsers while user env points Playwright at /opt/ms-playwright.
-  # Bridge the two paths instead of re-downloading browsers.
-  if [ ! -e /opt/ms-playwright ]; then
-    ln -s /opt/pw-browsers /opt/ms-playwright
-  elif [ -d /opt/ms-playwright ] && rmdir /opt/ms-playwright 2>/dev/null; then
-    ln -s /opt/pw-browsers /opt/ms-playwright
-  fi
-fi
-
-if [ ! -d "$PLAYWRIGHT_BROWSERS_PATH" ] && [ -d /opt/pw-browsers ]; then
-  # If the configured path is missing, stale, or a placeholder value from the
-  # hosting environment, prefer the image's preinstalled Playwright browsers.
-  export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
-  export PATCHRIGHT_BROWSERS_PATH=/opt/pw-browsers
-fi
 
 cleanup() {
   if [ -n "$WORKDIR" ]; then
@@ -117,6 +93,45 @@ with sync_playwright() as p:
 PY
 }
 
+registry_has_chrome() {
+  local registry="$1"
+  [ -d "$registry" ] || return 1
+  find "$registry" -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) -perm -111 -print -quit 2>/dev/null | grep -q .
+}
+
+choose_browser_registry() {
+  local candidate
+  for candidate in \
+    "${PLAYWRIGHT_BROWSERS_PATH:-}" \
+    "${PATCHRIGHT_BROWSERS_PATH:-}" \
+    /opt/pw-browsers \
+    /opt/ms-playwright \
+    "$HOME/.cache/ms-playwright"; do
+    [ -n "$candidate" ] || continue
+    if registry_has_chrome "$candidate"; then
+      export PLAYWRIGHT_BROWSERS_PATH="$candidate"
+      export PATCHRIGHT_BROWSERS_PATH="$candidate"
+      echo "[setup] using existing browser registry: $candidate"
+      return 0
+    fi
+  done
+
+  candidate="$(find /opt "$HOME/.cache" -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) -perm -111 -print -quit 2>/dev/null || true)"
+  if [ -n "$candidate" ]; then
+    # Browser executable path shape is <registry>/<browser-revision>/.../chrome.
+    local registry
+    registry="$(dirname "$(dirname "$(dirname "$candidate")")")"
+    export PLAYWRIGHT_BROWSERS_PATH="$registry"
+    export PATCHRIGHT_BROWSERS_PATH="$registry"
+    echo "[setup] discovered browser registry: $registry"
+    return 0
+  fi
+
+  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
+  export PATCHRIGHT_BROWSERS_PATH="${PATCHRIGHT_BROWSERS_PATH:-$PLAYWRIGHT_BROWSERS_PATH}"
+  return 1
+}
+
 verify_browser_binaries() {
   PLAYWRIGHT_CHROME="$(playwright_chrome_path)"
   PATCHRIGHT_CHROME="$(patchright_chrome_path)"
@@ -132,6 +147,8 @@ dump_browser_debug() {
   ls -la "$PLAYWRIGHT_BROWSERS_PATH" 2>/dev/null || true
   find "$PLAYWRIGHT_BROWSERS_PATH" -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) -print 2>/dev/null || true
 }
+
+choose_browser_registry || true
 
 echo "[setup] verifying existing browser binaries"
 if ! verify_browser_binaries; then
