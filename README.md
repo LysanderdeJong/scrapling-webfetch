@@ -52,7 +52,7 @@ Install Scrapling browser binaries and system dependencies:
 
 ```bash
 PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
-  uvx --from "scrapling[fetchers]>=0.4.9,<0.5" scrapling install
+  uvx --from "scrapling[fetchers]==0.4.9" scrapling install
 ```
 
 For sandbox setup automation, see [`scripts/setup.sh`](scripts/setup.sh).

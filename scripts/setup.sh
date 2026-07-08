@@ -126,19 +126,22 @@ dump_browser_debug() {
   find "$PLAYWRIGHT_BROWSERS_PATH" -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) -print 2>/dev/null || true
 }
 
-# `scrapling install` is the canonical browser/dependency install. Run it from
-# the same uv tool environment that webfetch uses so Playwright/Patchright agree
-# on the browser registry and revision.
-echo "[setup] downloading Scrapling browser binaries + system deps"
-mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
-NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" \
-  "$TOOL_ENV/bin/scrapling" install
-
-echo "[setup] verifying browser binaries after scrapling install"
+echo "[setup] verifying existing browser binaries"
 if ! verify_browser_binaries; then
-  echo "[setup] ERROR: scrapling install did not provide the browser binaries webfetch needs" >&2
-  dump_browser_debug
-  exit 1
+  # `scrapling install` is the canonical browser/dependency install. Run it from
+  # the same uv tool environment that webfetch uses so Playwright/Patchright agree
+  # on the browser registry and revision.
+  echo "[setup] existing browsers missing; running scrapling install"
+  mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+  NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" \
+    "$TOOL_ENV/bin/scrapling" install
+
+  echo "[setup] verifying browser binaries after scrapling install"
+  if ! verify_browser_binaries; then
+    echo "[setup] ERROR: scrapling install did not provide the browser binaries webfetch needs" >&2
+    dump_browser_debug
+    exit 1
+  fi
 fi
 
 echo "[setup] browser binaries verified"
