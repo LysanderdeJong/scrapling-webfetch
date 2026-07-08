@@ -32,6 +32,13 @@ if [ "$PLAYWRIGHT_BROWSERS_PATH" = "/opt/ms-playwright" ] && [ -d /opt/pw-browse
   fi
 fi
 
+if [ ! -d "$PLAYWRIGHT_BROWSERS_PATH" ] && [ -d /opt/pw-browsers ]; then
+  # If the configured path is missing, stale, or a placeholder value from the
+  # hosting environment, prefer the image's preinstalled Playwright browsers.
+  export PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
+  export PATCHRIGHT_BROWSERS_PATH=/opt/pw-browsers
+fi
+
 cleanup() {
   if [ -n "$WORKDIR" ]; then
     rm -rf "$WORKDIR"
