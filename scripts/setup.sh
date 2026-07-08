@@ -93,10 +93,26 @@ with sync_playwright() as p:
 PY
 }
 
-registry_has_chrome() {
-  local registry="$1"
-  [ -d "$registry" ] || return 1
-  find "$registry" -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) -perm -111 -print -quit 2>/dev/null | grep -q .
+resolve_chrome_paths() {
+  # The only check that matters: where do Playwright/Patchright actually resolve
+  # chromium to, given the current *_BROWSERS_PATH env, and is it executable.
+  PLAYWRIGHT_CHROME="$(playwright_chrome_path 2>/dev/null || true)"
+  PATCHRIGHT_CHROME="$(patchright_chrome_path 2>/dev/null || true)"
+}
+
+verify_browser_binaries() {
+  resolve_chrome_paths
+  echo "[setup] Playwright expects: ${PLAYWRIGHT_CHROME:-<unresolved>}"
+  echo "[setup] Patchright expects:  ${PATCHRIGHT_CHROME:-<unresolved>}"
+  [ -n "$PLAYWRIGHT_CHROME" ] && [ -x "$PLAYWRIGHT_CHROME" ] \
+    && [ -n "$PATCHRIGHT_CHROME" ] && [ -x "$PATCHRIGHT_CHROME" ]
+}
+
+registry_is_valid() {
+  # Quiet variant of verify_browser_binaries for candidate probing.
+  resolve_chrome_paths
+  [ -n "$PLAYWRIGHT_CHROME" ] && [ -x "$PLAYWRIGHT_CHROME" ] \
+    && [ -n "$PATCHRIGHT_CHROME" ] && [ -x "$PATCHRIGHT_CHROME" ]
 }
 
 choose_browser_registry() {
@@ -108,38 +124,15 @@ choose_browser_registry() {
     /opt/ms-playwright \
     "$HOME/.cache/ms-playwright"; do
     [ -n "$candidate" ] || continue
-    if registry_has_chrome "$candidate"; then
-      export PLAYWRIGHT_BROWSERS_PATH="$candidate"
-      export PATCHRIGHT_BROWSERS_PATH="$candidate"
+    [ -d "$candidate" ] || continue
+    export PLAYWRIGHT_BROWSERS_PATH="$candidate"
+    export PATCHRIGHT_BROWSERS_PATH="$candidate"
+    if registry_is_valid; then
       echo "[setup] using existing browser registry: $candidate"
       return 0
     fi
   done
-
-  candidate="$(find /opt "$HOME/.cache" -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) -perm -111 -print -quit 2>/dev/null || true)"
-  if [ -n "$candidate" ]; then
-    # Browser executable path shape is <registry>/<browser-revision>/.../chrome.
-    local registry
-    registry="$(dirname "$(dirname "$(dirname "$candidate")")")"
-    export PLAYWRIGHT_BROWSERS_PATH="$registry"
-    export PATCHRIGHT_BROWSERS_PATH="$registry"
-    echo "[setup] discovered browser registry: $registry"
-    return 0
-  fi
-
-  export PLAYWRIGHT_BROWSERS_PATH="${PLAYWRIGHT_BROWSERS_PATH:-/opt/ms-playwright}"
-  export PATCHRIGHT_BROWSERS_PATH="${PATCHRIGHT_BROWSERS_PATH:-$PLAYWRIGHT_BROWSERS_PATH}"
   return 1
-}
-
-verify_browser_binaries() {
-  PLAYWRIGHT_CHROME="$(playwright_chrome_path)"
-  PATCHRIGHT_CHROME="$(patchright_chrome_path)"
-
-  echo "[setup] Playwright expects: $PLAYWRIGHT_CHROME"
-  echo "[setup] Patchright expects:  $PATCHRIGHT_CHROME"
-
-  [ -x "$PLAYWRIGHT_CHROME" ] && [ -x "$PATCHRIGHT_CHROME" ]
 }
 
 dump_browser_debug() {
@@ -148,27 +141,37 @@ dump_browser_debug() {
   find "$PLAYWRIGHT_BROWSERS_PATH" -maxdepth 4 -type f \( -name chrome -o -name chrome-headless-shell \) -print 2>/dev/null || true
 }
 
-choose_browser_registry || true
-
-echo "[setup] verifying existing browser binaries"
-if ! verify_browser_binaries; then
-  # `scrapling install` is the canonical browser/dependency install. Run it from
-  # the same uv tool environment that webfetch uses so Playwright/Patchright agree
-  # on the browser registry and revision.
-  echo "[setup] existing browsers missing; running scrapling install"
-  mkdir -p "$PLAYWRIGHT_BROWSERS_PATH"
+install_browsers_only() {
+  # Browser binaries only. Never `scrapling install` / `playwright install-deps`:
+  # those run apt, which is broken on hosted images (ondrej/php PPA metadata).
+  # OS-level deps are already present on these images, so we only fetch browsers.
+  local target="${PLAYWRIGHT_BROWSERS_PATH:-/opt/pw-browsers}"
+  if ! mkdir -p "$target" 2>/dev/null; then
+    target="$HOME/.cache/ms-playwright"
+    mkdir -p "$target"
+  fi
+  export PLAYWRIGHT_BROWSERS_PATH="$target"
+  export PATCHRIGHT_BROWSERS_PATH="$target"
+  echo "[setup] installing chromium (browser only, no OS deps) into: $target"
   NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" \
-    "$TOOL_ENV/bin/scrapling" install
+    "$TOOL_ENV/bin/python" -m playwright install chromium
+  NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" \
+    "$TOOL_ENV/bin/python" -m patchright install chromium
+}
 
-  echo "[setup] verifying browser binaries after scrapling install"
+if choose_browser_registry; then
+  echo "[setup] browser binaries verified"
+else
+  echo "[setup] no usable preinstalled browser registry found"
+  install_browsers_only
+  echo "[setup] verifying browser binaries after install"
   if ! verify_browser_binaries; then
-    echo "[setup] ERROR: scrapling install did not provide the browser binaries webfetch needs" >&2
+    echo "[setup] ERROR: browser binaries still missing after install" >&2
     dump_browser_debug
     exit 1
   fi
+  echo "[setup] browser binaries verified"
 fi
-
-echo "[setup] browser binaries verified"
 
 if [ "$INSTALL_CLAUDE_SKILL" = "1" ]; then
   install_claude_skill_for_home "${CLAUDE_SKILL_HOME:-$HOME}"
