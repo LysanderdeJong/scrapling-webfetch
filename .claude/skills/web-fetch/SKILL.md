@@ -1,118 +1,112 @@
 ---
 name: web-fetch
 description: >-
-  Fetch rendered web pages with the local webfetch CLI. Use when a page needs
-  JavaScript rendering, CSS-selector extraction, bot/Cloudflare handling, or when
-  built-in fetch output is empty, blocked, or placeholder-only.
+  Fetch and operate web pages with the local webfetch CLI. Use when built-in
+  fetch output is empty, blocked, or placeholder-only; when a page needs
+  JavaScript rendering, Cloudflare/bot handling, or CSS-selector extraction;
+  when the task needs clicking, form filling, or logging in; when you need the
+  JSON API behind a page; or when you need a screenshot of a page.
 ---
 
 # web-fetch
 
-Use `webfetch`, the Scrapling-based one-shot CLI. It returns JSON:
+`webfetch` is a Scrapling-based CLI. Every call is one fresh browser (or HTTP
+request) and prints one JSON object:
 
 ```json
 {"status": 200, "url": "https://example.com/", "content": ["..."]}
 ```
 
-## Decision Ladder
+Optional output fields: `network` (`--record-requests`), `evaluate`
+(`--evaluate`), `screenshot` (absolute path, `--screenshot`). Errors go to
+stderr as `{"error": {"type": ..., "message": ...}}` with a non-zero exit.
+Exact flags: `webfetch get -h`, `webfetch fetch -h`.
 
-1. Static/simple page: `webfetch get URL --extraction-type markdown`
-2. JavaScript-rendered page: `webfetch fetch URL --extraction-type markdown`
-3. Bot protection or Cloudflare: `webfetch stealthy-fetch URL --extraction-type markdown`
+## Reading a page: the ladder
 
-Stay explicit. Do not hide retries behind auto-escalation. If output is empty,
-blocked, spinner-only, or consent-shell-only, retry with the next ladder step or
-the recovery options below.
+1. `webfetch get URL` — plain HTTP, fastest. TLS impersonation is off by default; if `get` is blocked, try `SCRAPLING_IMPERSONATE=chrome webfetch get URL` before climbing.
+2. `webfetch fetch URL` — real browser for JavaScript-rendered pages.
+3. `webfetch fetch URL --solve-cloudflare` — bot protection.
 
-## Recovery Options
+A step is done when `content` holds the data you came for. A spinner, a consent
+shell, a "verify you are human" page, or an empty list means climb one step, or
+apply one recovery option below. Escalate one step at a time and say which step
+you are on. (`stealthy-fetch` is an alias of `fetch`.)
 
-Consent shell or hydrated content missing:
+Recovery options for `fetch`:
 
-```bash
-webfetch fetch URL --network-idle --wait 3000 --extraction-type markdown
-```
+- Content hydrates late: `--network-idle --wait 3000`, or `--wait-selector '#content'` when you know the element.
+- Blocked one-shot, fine in a real session: `--warmup-url https://site.example/` (fetches the homepage first in the same browser), plus `--real-chrome --locale nl-NL --timezone-id Europe/Amsterdam` for a consistent profile.
+- Consent or login needed once: run `--headful --wait 60000 --save-state state.json`, let the human click through, then reuse with `--load-state state.json`.
 
-Known late element:
+## Shrinking output
 
-```bash
-webfetch fetch URL --wait-selector '#content' --network-idle --extraction-type markdown
-```
+`--css-selector` returns one `content` item per match; start broad
+(`'main, [role="main"], article'`) and narrow. If a selector returns `[]`,
+retry once without it: rendering may have worked and the selector be wrong.
+Prefer semantic selectors and `data-testid` over generated class names.
+`--extraction-type text` is the most compact; `markdown` (default) keeps links
+and structure.
 
-Hard protection:
+## Operating a page: look, then act
 
-```bash
-webfetch stealthy-fetch URL --solve-cloudflare --extraction-type markdown
-```
+Each call starts a fresh browser, so a multi-step task is one call carrying all
+its actions, with a look before it.
 
-One-shot stealth blocked but a normal browser session should work:
-
-```bash
-webfetch stealthy-fetch URL \
-  --warmup-url https://marketplace.example/ \
-  --real-chrome \
-  --no-browser-flags \
-  --locale nl-NL \
-  --timezone-id Europe/Amsterdam \
-  --network-idle \
-  --wait 2500 \
-  --no-google-search \
-  --block-webrtc \
-  --hide-canvas \
-  --no-block-ads \
-  --extraction-type text
-```
-
-Consent-gated site setup:
+1. **Look.** `webfetch fetch URL --extraction-type snapshot --search 'Search|Login|Next'`
+   returns the accessibility tree with `[ref=eN]` refs; `--search` keeps matching
+   lines and their ancestors. Use it to find controls; it is far cheaper than
+   markdown for that. Done when you can name a target for every control you need.
+2. **Act.** Pass the steps as `--action` JSON (an object or an array; repeatable).
+   The `content` you get back reflects the page after the actions, so add
+   `--css-selector`, `--extraction-type`, or another snapshot to read the result.
 
 ```bash
-webfetch stealthy-fetch URL \
-  --user-data-dir .webfetch-profile \
-  --headful \
-  --real-chrome \
-  --no-browser-flags \
-  --locale nl-NL \
-  --timezone-id Europe/Amsterdam \
-  --network-idle \
-  --wait 60000 \
-  --extraction-type text
+webfetch fetch https://quotes.toscrape.com/login --action '[
+  {"type": "textbox", "target": "#username", "value": "user"},
+  {"type": "textbox", "target": "#password", "value": "secret"},
+  {"type": "click", "target": "input[type=submit]"},
+  {"type": "wait_element", "target": "a[href=\"/logout\"]"}
+]' --extraction-type text
 ```
 
-## Selectors
+Action types (same schema as the Scrapling MCP `browser_actions` tool):
 
-Use `--css-selector` after the page is reachable to reduce tokens. Start broad,
-then narrow.
+- Mouse: `click` / `move` (`target`, or `x`+`y`), `mouse_down`, `mouse_up`, `wheel` (`delta_x`, `delta_y`). `click` takes `button`, `click_count`, `delay`.
+- Fields (`target` required): `textbox` (`value`, `clear` default true), `checkbox` (`value` true/false), `radio`, `combobox` (`value` = option label or list).
+- Keys and dialogs: `press_key` (`key`, e.g. `Enter`, `ControlOrMeta+A`), `dialog` (`accept`, optional `prompt_text`).
+- Waits: `wait_time` (`milliseconds`), `wait_element` (`target`, `state` default visible), `wait_load` (`state`: load, domcontentloaded, networkidle).
 
-Broad content selectors:
+Rules that decide whether actions work:
 
-```bash
-webfetch fetch URL --css-selector 'main, [role="main"], article' --extraction-type markdown
-```
+- `target` is a Playwright selector: CSS, `text=Next`, `role=button[name="Search"]`, or `aria-ref=eN` from a snapshot. Refs are positional, so they hold only while the page structure matches the snapshot; for pages that change between loads, use CSS or `role=` targets.
+- Place a `dialog` action before the action that opens the dialog.
+- After a click that navigates, add `wait_load` or `wait_element` so the next step sees the new page.
+- Actions run after page load and before `--wait-selector` / `--wait`, so those flags wait for the result of your actions.
+- The first failing action stops the call with an error naming it (`Action 3 (click) failed: ...`). Fix that step, then rerun the whole chain.
+- `--slowly` adds human-like delays for sites that flag instant typing.
 
-Repeated product/result selectors:
+## Getting the data behind a page
 
-```bash
-webfetch fetch URL --css-selector '.product, .product-card, [data-testid*="product"], [class*="product"]' --extraction-type text
-```
+1. Record: `webfetch fetch URL --network-idle --record-requests '/api/'`. The `network` array lists XHR/fetch responses (`url`, `status`, `method`, `body`). Done when you have found the request that carries the data.
+2. Call it directly, without a browser:
+   `webfetch request 'https://site.example/api/items' --method POST --json '{"page": 2}' --header 'Accept: application/json' --extraction-type text --no-main-content-only`
+   (`--param NAME=VALUE`, `--data`, `--cookie NAME=VALUE` also exist; `--data`/`--json` need a non-GET `--method`.)
 
-If selector output is empty, retry once without the selector before escalating;
-the selector may be wrong even when rendering worked. Prefer semantic selectors
-and `data-testid` over generated class names.
+Data embedded in page variables: `--evaluate '() => window.__NEXT_DATA__'`
+runs in the page's own JavaScript world and puts the JSON result in `evaluate`.
 
-## Options To Remember
+## Seeing a page
 
-- `--extraction-type markdown|html|text` — default `markdown`.
-- `--main-content-only / --no-main-content-only` — default on; keeps prompt-injection cleanup.
-- `--network-idle`, `--wait <ms>`, `--wait-selector <css>` — hydration recovery.
-- `--headless / --headful` — browser commands default to headless; use headful for manual consent/login setup.
-- `--block-ads / --no-block-ads` — browser commands default to Scrapling ad/tracker blocking.
-- `--disable-resources` — speed option; can break pages.
-- `--session` / `--user-data-dir <dir>` — use `StealthySession`; `--user-data-dir` persists browser state and implies session mode.
-- `--warmup-url <url>` — fetch setup pages first in the same `StealthySession`; repeat for multiple warmups.
-- `--real-chrome`, `--locale`, `--timezone-id`, `--no-browser-flags`, `--no-google-search` — useful when session consistency matters more than sandbox defaults.
+`--screenshot shot.png` (add `--full-page` for the whole scroll height) saves an
+image and puts its absolute path in `screenshot`; read that file to inspect
+layout, captchas, or why `content` came back empty.
 
-Notes:
+## Gotchas
 
-- `webfetch get` disables curl_cffi impersonation by default (`impersonate=None`).
-- Keep `--main-content-only` on unless raw page fidelity matters.
-- If browser commands fail with `ERR_CONNECTION_CLOSED`, confirm full network access and rerun setup.
-- If `webfetch` is missing, run `scripts/setup.sh` or `./scripts/webfetch` from a checkout.
+- `--main-content-only` (default on) strips hidden prompt-injection text; turn it off with `--no-main-content-only` only for raw fidelity, such as reading JSON API bodies.
+- `get`/`request` rejects redirects to private or internal IPs.
+- Session-only features (`--record-requests`, `--save-state`, `--load-state`, `--evaluate`, `--screenshot`, snapshots) switch to session mode automatically.
+- `--cdp-url URL --reuse-context` attaches to a Chromium the human already runs and reuses its logins; each call still opens a new tab.
+- `ERR_CONNECTION_CLOSED` from browser commands: confirm network access and rerun `scripts/setup.sh`.
+- `webfetch` missing: run `scripts/setup.sh`, or `./scripts/webfetch` from a checkout.

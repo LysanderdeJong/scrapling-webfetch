@@ -15,6 +15,18 @@ Output is JSON on stdout:
 {"status": 200, "url": "https://example.com/", "content": ["Example Domain..."]}
 ```
 
+Some flags add optional fields to the output:
+
+- `network`: with `--record-requests`, an array of recorded XHR/fetch responses,
+  each with `url`, `status`, `method`, `resource_type`, `body`, and an optional
+  `body_note`.
+- `evaluate`: with `--evaluate`, the JSON result of the JavaScript expression.
+- `screenshot`: with `--screenshot`, the absolute path of the saved image.
+
+With `--extraction-type snapshot`, `content` holds accessibility snapshots instead
+of page text: one item for the page, or one per matching element with
+`--css-selector`.
+
 ## Why This Exists
 
 Scrapling already has a full MCP server and a general-purpose CLI. This tool is a
@@ -52,8 +64,10 @@ Install Scrapling browser binaries and system dependencies:
 
 ```bash
 PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers \
-  uvx --from "scrapling[fetchers]==0.4.9" scrapling install
+  uvx --from "scrapling[fetchers]==0.5.1" scrapling install
 ```
+
+Only Patchright's Chromium is needed for the browser commands now.
 
 For sandbox setup automation, see [`scripts/setup.sh`](scripts/setup.sh).
 
@@ -87,7 +101,8 @@ installer.
 
 ### `get`
 
-Fast HTTP request through Scrapling's `Fetcher.get`. Uses `$HTTPS_PROXY` by
+Fast HTTP request through Scrapling's `Fetcher`. `request` is an alias, so
+`webfetch request URL` works too. Uses `$HTTPS_PROXY` by
 default when present. Browser impersonation is disabled by default
 (`impersonate=None`) because some agent sandboxes have TLS/proxy stacks that are
 incompatible with curl_cffi browser profiles. Set `SCRAPLING_IMPERSONATE=firefox`
@@ -97,9 +112,28 @@ or another curl_cffi profile only when you explicitly want impersonation.
 webfetch get https://example.com --extraction-type markdown
 ```
 
+Use `--method` for other HTTP methods: `GET` (default), `POST`, `PUT`, or
+`DELETE`. The method is case-insensitive. Send a form body with `--data` or a
+JSON body with `--json`; both need a non-GET method and fail with an error on
+`GET`. `--param NAME=VALUE` adds query parameters.
+
+```bash
+webfetch get https://api.example.com/items \
+  --method POST \
+  --json '{"name": "gpu", "qty": 2}' \
+  --header 'Authorization: Bearer TOKEN' \
+  --extraction-type text
+```
+
+Redirects use Scrapling's "safe" mode: a redirect to a private or internal IP
+address is rejected.
+
 ### `fetch`
 
-Dynamic Chromium fetch for JavaScript-rendered pages. Browser egress defaults to
+Patchright Chromium fetch for JavaScript-rendered and bot-protected pages.
+Scrapling 0.5 dropped the plain Playwright backend and merged its browser
+fetchers into `StealthyFetcher`, so `fetch` takes every browser flag, including
+`--solve-cloudflare`. Browser egress defaults to
 `--no-proxy-server --disable-quic`, and the command passes
 `ignore_https_errors=True` for transparent-MITM agent sandboxes.
 
@@ -113,8 +147,8 @@ webfetch fetch https://app.example.com \
 
 ### `stealthy-fetch`
 
-Stealth Chromium fetch for bot protection / Cloudflare-style sites. Alias:
-`stealthy_fetch`.
+Compatibility alias for `fetch` (also `stealthy_fetch`). Kept so existing
+scripts keep working; it behaves exactly like `fetch`.
 
 ```bash
 webfetch stealthy-fetch https://hard.example.com \
@@ -160,11 +194,155 @@ webfetch stealthy-fetch "https://community.example/" \
   --extraction-type text
 ```
 
+To find the JSON API behind a JavaScript page, record the XHR/fetch traffic and
+read the `network` array in the output:
+
+```bash
+webfetch fetch "https://app.example.com/search?q=gpu" \
+  --network-idle \
+  --record-requests '/api/' \
+  --extraction-type text
+```
+
+To log in once and reuse the session later, save the state from a headful run and
+load it in a later headless run:
+
+```bash
+webfetch fetch "https://app.example.com/login" \
+  --headful \
+  --network-idle \
+  --wait 60000 \
+  --save-state state.json \
+  --extraction-type text
+
+webfetch fetch "https://app.example.com/dashboard" \
+  --load-state state.json \
+  --network-idle \
+  --extraction-type text
+```
+
+To use a Chromium you already started with `--remote-debugging-port=9222`, connect
+over CDP and reuse its default context and login state:
+
+```bash
+webfetch fetch "https://app.example.com/dashboard" \
+  --cdp-url http://localhost:9222 \
+  --reuse-context \
+  --extraction-type text
+```
+
+## Interacting with Pages
+
+Browser commands can act on the page before the content is extracted. Actions run
+after the page loads and before `--wait-selector` and `--wait`, so the output
+reflects the page after the actions. Each `--action` takes one action object or an
+array of them, and the flag can repeat. `--slowly` adds random delays between
+actions and keystrokes. The first action that fails aborts the command with an
+error JSON whose message names the action, for example `Action 3 (click) failed`.
+
+### Logging In
+
+```bash
+webfetch fetch "https://quotes.toscrape.com/login" \
+  --action '[
+    {"type": "textbox", "target": "#username", "value": "demo"},
+    {"type": "textbox", "target": "#password", "value": "demo"},
+    {"type": "click", "target": "input[type=submit]"},
+    {"type": "wait_element", "target": "a[href=\"/logout\"]"}
+  ]' \
+  --extraction-type text
+```
+
+Replace the demo values with real credentials. The `wait_element` action waits
+for the logout link, so the extracted text is taken after the login completes.
+
+### Snapshot, Then Click by Ref
+
+`--extraction-type snapshot` returns an accessibility (ARIA) snapshot of the page.
+Elements in the snapshot carry `[ref=eN]` markers. A later call can target one of
+those elements with `aria-ref=eN`.
+
+```bash
+webfetch fetch "https://quotes.toscrape.com/" \
+  --extraction-type snapshot \
+  --search 'Next'
+```
+
+`--search` keeps the matching lines plus their ancestor lines, so the `Next`
+link keeps its place in the tree. Note its `[ref=eN]`, then click it in a second
+call:
+
+```bash
+webfetch fetch "https://quotes.toscrape.com/" \
+  --action '{"type": "click", "target": "aria-ref=e94"}' \
+  --action '{"type": "wait_load", "state": "load"}' \
+  --extraction-type text
+```
+
+Refs are specific to the page structure at the time of the snapshot. The CLI takes
+a fresh snapshot before it runs ref-targeted actions, so `aria-ref` works only
+while the page structure matches the earlier snapshot. If the page has changed,
+take a new snapshot and use the refs from it. After a click that navigates, add a
+`wait_load` or `wait_element` action so extraction sees the new page.
+
+`--snapshot-depth N` limits the tree depth, `--boxes` adds viewport bounding
+boxes, and `--css-selector` returns one snapshot per matching element.
+
+### Action Types
+
+Each action is a JSON object with a `type` and the fields listed below. A
+`target` is a Playwright selector: CSS (`#username`), text (`text=Sign in`), role
+(`role=button[name="Search"]`), or `aria-ref=eN` from a snapshot. Where an action
+has a `timeout`, it is in milliseconds and defaults to 30000.
+
+| Type | Required fields | Optional fields | Notes |
+|---|---|---|---|
+| `click` | `target`, or both `x` and `y` | `button` (`left`), `click_count` (`1`), `delay`, `timeout` | Clicks an element, or the viewport point `x`, `y` |
+| `move` | `target`, or both `x` and `y` | `steps` (`1`), `timeout` | Hovers an element, or moves the mouse to `x`, `y` |
+| `mouse_down` | none | `button` (`left`) | Presses a mouse button at the current position |
+| `mouse_up` | none | `button` (`left`) | Releases a mouse button at the current position |
+| `wheel` | none | `delta_x` (`0`), `delta_y` (`0`) | Scrolls with the mouse wheel |
+| `textbox` | `target`, `value` | `clear` (`true`), `timeout` | Clears the field unless `clear` is false, then types `value` |
+| `checkbox` | `target`, `value` | `timeout` | Sets the checkbox to `true` or `false` |
+| `radio` | `target` | `value` (`true`), `timeout` | Sets the radio button's checked state |
+| `combobox` | `target`, `value` | `timeout` | Selects the option whose label is `value` |
+| `press_key` | `key` | none | Presses a keyboard key, such as `Enter` |
+| `dialog` | `accept` | `prompt_text` | Handles the next dialog: accepts when `accept` is true, dismisses otherwise. Must come before the action that opens the dialog |
+| `wait_time` | `milliseconds` | none | Waits for a fixed time |
+| `wait_element` | `target` | `state` (`visible`), `timeout` | Waits for an element to reach a state, such as `attached`, `detached`, `visible`, or `hidden` |
+| `wait_load` | `state` | `timeout` | Waits for a Playwright load state |
+
+### Screenshots and JavaScript
+
+`--screenshot PATH` saves a PNG or JPEG, chosen by the file extension (`.png` or
+`.jpg`), at CSS-pixel scale. `--full-page` captures the whole scrollable page. The
+output's `screenshot` field holds the absolute path.
+
+```bash
+webfetch fetch "https://quotes.toscrape.com/" \
+  --screenshot quotes.png \
+  --full-page \
+  --extraction-type text
+```
+
+`--evaluate JS` runs JavaScript in the page's main world, so it can read page
+globals such as `window.__NEXT_DATA__`. The JSON result goes in the output's
+`evaluate` field.
+
+```bash
+webfetch fetch "https://app.example.com/" \
+  --evaluate 'window.__NEXT_DATA__?.buildId' \
+  --extraction-type text
+```
+
+`--evaluate`, `--screenshot`, and `--extraction-type snapshot` read the live page
+after the actions and waits finish, and they switch the command to session mode.
+
 ## Options
 
 | Option | Default | Notes |
 |---|---:|---|
-| `--extraction-type markdown|html|text` | `markdown` | Mirrors Scrapling MCP; Markdown uses `markdownify` |
+| `--extraction-type markdown|html|text|snapshot` | `markdown` | Mirrors Scrapling MCP; Markdown uses `markdownify`; `snapshot` is browser only |
 | `--css-selector SELECTOR` | none | One output item per matching element |
 | `--main-content-only / --no-main-content-only` | true | Body-scopes and sanitizes content before selector/extraction |
 | `--wait-selector SELECTOR` | none | Browser commands only |
@@ -179,12 +357,36 @@ webfetch stealthy-fetch "https://community.example/" \
 | `--timezone-id ZONE` | none | Browser commands only; passes Scrapling timezone |
 | `--google-search / --no-google-search` | Scrapling default | Browser commands only; controls Google referrer behavior |
 | `--no-browser-flags` | false | Browser commands only; disables this CLI's default Chromium flags |
-| `--session` | false | `stealthy-fetch` only; use `StealthySession` instead of one-shot `StealthyFetcher` |
-| `--user-data-dir DIR` | none | `stealthy-fetch` only; persistent browser profile, implies `--session` |
-| `--warmup-url URL` | none | `stealthy-fetch` only; fetch URL before the target in the same session, repeatable |
-| `--block-webrtc` | false | `stealthy-fetch` only |
-| `--hide-canvas` | false | `stealthy-fetch` only |
-| `--allow-webgl / --no-allow-webgl` | Scrapling default | `stealthy-fetch` only |
+| `--session` | false | Browser commands only; use `StealthySession` instead of one-shot `StealthyFetcher` |
+| `--user-data-dir DIR` | none | Browser commands only; persistent browser profile, implies `--session` |
+| `--warmup-url URL` | none | Browser commands only; fetch URL before the target in the same session, repeatable |
+| `--solve-cloudflare` | false | Browser commands only |
+| `--block-webrtc` | false | Browser commands only |
+| `--hide-canvas` | false | Browser commands only |
+| `--allow-webgl / --no-allow-webgl` | Scrapling default | Browser commands only |
+| `--pierce-shadow` | false | Browser commands only; include open Shadow DOM content in the captured HTML |
+| `--executable-path PATH` | none | Browser commands only; custom Chromium-compatible browser; falls back to `SCRAPLING_EXECUTABLE_PATH` |
+| `--cdp-url URL` | none | Browser commands only; connect to an existing Chromium over an HTTP or WebSocket CDP endpoint (Scrapling `RemoteSession`); `--real-chrome` is ignored with it |
+| `--reuse-context` | false | Browser commands only; with `--cdp-url`, reuse the browser's default context and login state; otherwise a separate context is created and closed afterwards |
+| `--load-state PATH` | none | Browser commands only; restore cookies, localStorage, and IndexedDB from Playwright storage-state JSON (not sessionStorage); implies session mode |
+| `--save-state PATH` | none | Browser commands only; save cookies, localStorage, and IndexedDB to Playwright storage-state JSON (not sessionStorage); implies session mode |
+| `--record-requests [URL_REGEX]` | false | Browser commands only; record XHR/fetch traffic and HTTP errors during the session; matches (optionally regex-filtered, max 100) go in the output `network` array; implies session mode |
+| `--header 'NAME: VALUE'` | none | All commands; extra request header, repeatable |
+| `--cookie NAME=VALUE` | none | All commands; request cookie, repeatable; browser commands set it for the target URL |
+| `--method METHOD` | `GET` | `get` only; `GET`, `POST`, `PUT`, or `DELETE`, case-insensitive |
+| `--param NAME=VALUE` | none | `get` only; query parameter, repeatable |
+| `--data STR` | none | `get` only; form or raw request body; needs a non-GET `--method` |
+| `--json JSON` | none | `get` only; JSON request body; needs a non-GET `--method` |
+| `--useragent UA` | none | Browser commands only |
+| `--wait-selector-state STATE` | Scrapling default | Browser commands only; `attached`, `detached`, `visible`, or `hidden`; used with `--wait-selector` |
+| `--action JSON` | none | Browser commands only; one action object or an array, repeatable; see [Interacting with Pages](#interacting-with-pages) |
+| `--slowly` | false | Browser commands only; random delays between actions and keystrokes |
+| `--evaluate JS` | none | Browser commands only; runs in the page's main world; result goes in the output `evaluate` field; implies session mode |
+| `--screenshot PATH` | none | Browser commands only; `.png` or `.jpg` by extension; absolute path goes in the output `screenshot` field; implies session mode |
+| `--full-page` | false | Browser commands only; with `--screenshot`, captures the whole scrollable page |
+| `--snapshot-depth N` | none | Browser commands only; with `--extraction-type snapshot`, limits tree depth |
+| `--boxes` | false | Browser commands only; with `--extraction-type snapshot`, adds viewport bounding boxes |
+| `--search REGEX` | none | Browser commands only; with `--extraction-type snapshot`, keeps matching lines and their ancestors |
 
 If a browser command returns only a cookie/consent shell, spinner, or empty page
 frame, retry with hydration waits before changing backends:
@@ -224,16 +426,17 @@ Errors are JSON on stderr with a non-zero exit:
 
 ## Prompt-Injection Protection
 
-`--main-content-only` is enabled by default to match Scrapling MCP's
-prompt-injection-protection ergonomics. Before applying `--css-selector` and
-converting output, `webfetch` narrows to `<body>` and removes:
+`--main-content-only` is enabled by default and uses Scrapling MCP's own
+prompt-injection cleaning. Before applying `--css-selector` and converting
+output, `webfetch` narrows to `<body>` and removes:
 
 - `script`, `style`, `noscript`, `svg`, and `template` nodes
-- `aria-hidden="true"` nodes
-- common CSS-hidden nodes: `display:none`, `visibility:hidden`, `opacity:0`, and
-  zero-size font/height/width nodes
+- `aria-hidden="true"` nodes and `<slot hidden>`
+- inline-CSS-hidden nodes: `display:none`, `visibility:hidden`, and zero
+  `opacity`/`font-size`/`height`/`width`/`max-height`/`max-width`, including
+  `!important` and comment-obfuscated declarations
 - HTML comments
-- zero-width Unicode characters
+- zero-width Unicode and control characters
 
 Use `--no-main-content-only` when raw page fidelity matters more than safety.
 

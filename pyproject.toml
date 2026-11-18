@@ -1,12 +1,12 @@
 [project]
 name = "scrapling-webfetch"
-version = "0.1.0"
+version = "0.2.0"
 description = "MCP-shaped Scrapling web fetching CLI for AI agents"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
-  "scrapling[fetchers]==0.4.9",
-  "markdownify>=1.2,<2",
+  "scrapling[fetchers]==0.5.1",
+  "markdownify>=1.2.3,<2",
 ]
 
 [project.scripts]

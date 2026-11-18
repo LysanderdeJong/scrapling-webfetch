@@ -77,14 +77,6 @@ install_claude_skill_for_home() {
     "$target_home/.claude/skills/web-fetch/SKILL.md"
 }
 
-playwright_chrome_path() {
-  "$TOOL_ENV/bin/python" - <<'PY'
-from playwright.sync_api import sync_playwright
-with sync_playwright() as p:
-    print(p.chromium.executable_path)
-PY
-}
-
 patchright_chrome_path() {
   "$TOOL_ENV/bin/python" - <<'PY'
 from patchright.sync_api import sync_playwright
@@ -94,25 +86,21 @@ PY
 }
 
 resolve_chrome_paths() {
-  # The only check that matters: where do Playwright/Patchright actually resolve
-  # chromium to, given the current *_BROWSERS_PATH env, and is it executable.
-  PLAYWRIGHT_CHROME="$(playwright_chrome_path 2>/dev/null || true)"
+  # Scrapling 0.5 drives Chromium only through Patchright. The only check that
+  # matters: where does Patchright resolve chromium to, and is it executable.
   PATCHRIGHT_CHROME="$(patchright_chrome_path 2>/dev/null || true)"
 }
 
 verify_browser_binaries() {
   resolve_chrome_paths
-  echo "[setup] Playwright expects: ${PLAYWRIGHT_CHROME:-<unresolved>}"
-  echo "[setup] Patchright expects:  ${PATCHRIGHT_CHROME:-<unresolved>}"
-  [ -n "$PLAYWRIGHT_CHROME" ] && [ -x "$PLAYWRIGHT_CHROME" ] \
-    && [ -n "$PATCHRIGHT_CHROME" ] && [ -x "$PATCHRIGHT_CHROME" ]
+  echo "[setup] Patchright expects: ${PATCHRIGHT_CHROME:-<unresolved>}"
+  [ -n "$PATCHRIGHT_CHROME" ] && [ -x "$PATCHRIGHT_CHROME" ]
 }
 
 registry_is_valid() {
   # Quiet variant of verify_browser_binaries for candidate probing.
   resolve_chrome_paths
-  [ -n "$PLAYWRIGHT_CHROME" ] && [ -x "$PLAYWRIGHT_CHROME" ] \
-    && [ -n "$PATCHRIGHT_CHROME" ] && [ -x "$PATCHRIGHT_CHROME" ]
+  [ -n "$PATCHRIGHT_CHROME" ] && [ -x "$PATCHRIGHT_CHROME" ]
 }
 
 choose_browser_registry() {
@@ -153,8 +141,6 @@ install_browsers_only() {
   export PLAYWRIGHT_BROWSERS_PATH="$target"
   export PATCHRIGHT_BROWSERS_PATH="$target"
   echo "[setup] installing chromium (browser only, no OS deps) into: $target"
-  NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" \
-    "$TOOL_ENV/bin/python" -m playwright install chromium
   NO_PROXY="localhost,127.0.0.1" no_proxy="localhost,127.0.0.1" \
     "$TOOL_ENV/bin/python" -m patchright install chromium
 }
